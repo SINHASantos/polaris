@@ -20,15 +20,14 @@ jobs:
           target_branch: release
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Checkout Release Branch
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           ref: release
       - name: Update Polaris Version in Cargo.toml
         run: gawk -i inplace '/^version/ { if (count == 0) { $3 = "\"${{ github.event.inputs.versionNumber }}\""; count++ } } 1' Cargo.toml
       - name: Commit Cargo.toml Version Change
-        uses: EndBug/add-and-commit@v5
+        uses: EndBug/add-and-commit@v9
         with:
-          branch: release
           message: "Updated version number"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,38 +38,14 @@ jobs:
           git tag -f -a ${{ github.event.inputs.versionNumber }} -m "Version number"
           git push -f --tags
 
-  create_release:
-    name: Create Github Release
-    runs-on: ubuntu-latest
-    needs: branch_and_tag
-
-    steps:
-      - name: Create Github Release
-        id: create_release
-        uses: actions/create-release@v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.event.inputs.versionNumber }}
-          release_name: Polaris ${{ github.event.inputs.versionNumber }}
-          draft: true
-          prerelease: false
-      - name: Write Upload URL To Disk
-        run: echo "${{ steps.create_release.outputs.upload_url }}" > upload-url
-      - name: Store Upload URL
-        uses: actions/upload-artifact@v1
-        with:
-          name: release
-          path: upload-url
-
   windows:
     name: Windows
     runs-on: windows-latest
-    needs: create_release
+    needs: branch_and_tag
 
     steps:
       - name: Checkout Polaris
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           ref: release
       - name: Install Rust Toolchain
@@ -81,51 +56,55 @@ jobs:
         uses: ./.github/actions/make-windows-release
         with:
           version-number: ${{ github.event.inputs.versionNumber }}
-          output-file: polaris.msi
-      - name: Retrieve Upload URL
-        uses: actions/download-artifact@v1
+          output-file: Polaris_${{ github.event.inputs.versionNumber }}.msi
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
         with:
-          name: release
-      - name: Read Upload URL
-        shell: bash
-        run: echo "UPLOAD_URL=$(cat release/upload-url)" >> $GITHUB_ENV
-      - name: Upload Installer To Github Release
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: polaris.msi
-          asset_name: Polaris_${{ github.event.inputs.versionNumber }}.msi
-          asset_content_type: application/x-msi
+          if-no-files-found: error
+          name: windows-artifact
+          path: Polaris_${{ github.event.inputs.versionNumber }}.msi
 
   linux:
     name: Linux
     runs-on: ubuntu-latest
-    needs: create_release
+    needs: branch_and_tag
 
     steps:
       - name: Checkout Polaris
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           ref: release
       - name: Make release
         uses: ./.github/actions/make-linux-release
         with:
           version-number: ${{ github.event.inputs.versionNumber }}
-          output-file: polaris.tar.gz
-      - name: Retrieve Upload URL
-        uses: actions/download-artifact@v1
+          output-file: Polaris_${{ github.event.inputs.versionNumber }}.tar.gz
+      - name: Upload release
+        uses: actions/upload-artifact@v4
         with:
-          name: release
-      - name: Read Upload URL
-        run: echo "UPLOAD_URL=$(cat release/upload-url)" >> $GITHUB_ENV
-      - name: Upload To Github Release
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if-no-files-found: error
+          name: linux-artifact
+          path: Polaris_${{ github.event.inputs.versionNumber }}.tar.gz
+
+  create_release:
+    name: Create Github Release
+    runs-on: ubuntu-latest
+    needs: [windows, linux]
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          upload_url: ${{ env.UPLOAD_URL }}
-          asset_path: polaris.tar.gz
-          asset_name: Polaris_${{ github.event.inputs.versionNumber }}.tar.gz
-          asset_content_type: application/gzip
+          merge-multiple: true
+      - name: Make Github release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: 'Release notes are documented in [CHANGELOG.md](https://github.com/agersant/polaris/blob/master/CHANGELOG.md)'
+          draft: true
+          prerelease: false
+          name: Polaris ${{ github.event.inputs.versionNumber }}
+          tag_name: ${{ github.event.inputs.versionNumber }}
+          fail_on_unmatched_files: true
+          files: |
+            Polaris_${{ github.event.inputs.versionNumber }}.tar.gz
+            Polaris_${{ github.event.inputs.versionNumber }}.msi
